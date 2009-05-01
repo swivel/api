@@ -1,0 +1,507 @@
+#!/usr/bin/env ruby 
+
+# == Synopsis 
+#   Creates or updates a Swivel graph from a CSV.
+#
+# == Examples
+#   This command creates a chart in group 1 for gerad@swivel.com.
+#     ruby s6cmd.rb -u 'email@address.com' -p 'password' -g 1 -f file.csv
+#
+#   Using the command with STDIN and giving the chart the name "Chart Name."
+#     cat <<END | ruby s6cmd.rb -u 'email@address.com' -p 'password' -g 1 -n "Chart Name"
+#     one,two,three
+#     a,1,2
+#     b,3,4
+#     END
+#
+#   Updating the chart with name "Chart Name."  Also, setting the title.
+#     cat <<END | ruby s6cmd.rb -u 'email@address.com' -p 'password' -g 1 -n "Chart Name" -t "Chart Title" -k name
+#     one,four,five
+#     c,5,6
+#     d,7,8
+#     END
+#
+#   Merging data the chart with name "Chart Name."  Result adds data to the new chart, overwriting
+#   existing data if the row and column headers overlap.
+#     cat <<END | ruby s6cmd.rb -u 'email@address.com' -p 'password' -g 1 -n "Chart Name" -k name -m
+#     one,two,three
+#     a,1,2
+#     b,3,4
+#     END
+#
+#   Other examples:
+#
+#   Create a time-series chart:
+#     cat <<END | ruby s6cmd.rb -u 'email@address.com' -p 'password' -g 1 -n "Time Series"
+#     one,value1,value2
+#     01/01/2009,1,2
+#     02/01/2009,3,4
+#     03/01/2009,5,6
+#     END
+#
+#   Update it:
+#     cat <<END | ruby s6cmd.rb -u 'email@address.com' -p 'password' -g 1 -n "Time Series" -k name -m
+#     one,value1,value2
+#     04/01/2009,7,8
+#     END
+#
+# == Usage 
+#   s6cmd [options] source_file
+#
+#   For help use: s6cmd -h
+#
+# == Options
+#   -h, --help                       Displays this help message
+#   -v, --version                    Display the version, then exit
+#   -q, --quiet                      Output as little as possible, overrides verbose
+#   -V, --verbose                    Verbose output
+#   -u, --user EMAIL                 EMAIL address of Swivel user to create chart under.
+#   -p, --password PASSWORD          PASSWORD of Swivel user to create chart under.
+#   -g, --group ID                   Numeric ID of group to create chart under.
+#   -f, --file CSV                   Location of CSV file for chart data (optional).
+#                                    Default is STDIN.
+#   -m, --merge                      Merge new data with existing chart data.
+#                                    Uses row and column headers as merge keys.
+#   -t, --chart-title TITLE          TITLE of chart (optional).
+#   -n, --chart-name NAME            NAME of chart (optional).
+#   -d, --chart-description DESCRIPTION
+#                                    DESCRIPTION of chart (optional).
+#   -k, --chart-key KEY              KEY to determine what chart to update.
+#                                    KEY should be one of: name, title, description
+#
+# == Author
+#   Swivel, LLC
+#
+# == Copyright
+#   Copyright (c) 2009 Swivel, LLC. Licensed under the MIT License:
+#   http://www.opensource.org/licenses/mit-license.php
+
+require 'optparse' 
+require 'rdoc/usage'
+require 'ostruct'
+require 'date'
+require 'fastercsv'
+require 'xmlsimple'
+require 'uri'
+require 'net/https'
+require 'json'
+
+class App
+  VERSION = '0.0.1'
+  API_URL = 'https://api.swivel.com/v1'
+  SWIVEL_URL = 'https://business.swivel.com'
+
+  attr_reader :options
+
+  def initialize(arguments, stdin)
+    @arguments = arguments
+    @stdin = stdin
+    
+    # Set defaults
+    @options = OpenStruct.new
+    @options.verbose = false
+    @options.quiet = false
+    @options.url = API_URL
+  end
+
+  # Parse options, check arguments, then process the command
+  def run
+
+    if parsed_options? && arguments_valid? 
+
+      puts "Start at #{DateTime.now}\n\n" if @options.verbose
+
+      output_options if @options.verbose # [Optional]
+
+      process_arguments
+      process_command
+
+      puts "\nFinished at #{DateTime.now}" if @options.verbose
+    else
+      output_usage
+    end
+
+  end
+
+  protected
+
+    def parsed_options?
+      opts = OptionParser.new 
+      opts.on('-v', '--version')    { output_version ; exit 0 }
+      opts.on('-h', '--help')       { output_help }
+      opts.on('-V', '--verbose')    { @options.verbose = true }  
+      opts.on('-q', '--quiet')      { @options.quiet = true }
+
+      opts.on '-u', '--user EMAIL',
+          'EMAIL address of Swivel user to create chart under.' do |u|
+        @options.user = u
+      end
+
+      opts.on '-p', '--password PASSWORD',
+          'PASSWORD of Swivel user to create chart under.' do |p|
+        @options.password = p
+      end
+
+      opts.on '-g', '--group ID', Integer,
+          'Numeric ID of group to create chart under.' do |g|
+        @options.group = g
+      end
+
+      opts.on '-l', '--swivel-location ROOT',
+          'ROOT url for Swivel (optional).',
+          'Default is https://api.swivel.com/v1' do |u|
+        @options.url = u
+      end
+
+      opts.on '-f', '--file CSV',
+          'Location of CSV file for chart data (optional).',
+          'Default is STDIN.' do |f|
+        @options.file = f
+      end
+
+      opts.on '-m', '--merge',
+          'Merge new data with existing chart data.',
+          'Uses row and column headers as merge keys.' do
+        @options.merge = true
+      end
+
+      opts.on '-t', '--chart-title TITLE',
+          'TITLE of chart (optional).' do |ct|
+        @options.chart_title = ct
+      end
+
+      opts.on '-n', '--chart-name NAME',
+          'NAME of chart (optional).' do |cn|
+        @options.chart_name = cn
+      end
+
+      opts.on '-d', '--chart-description DESCRIPTION',
+          'DESCRIPTION of chart (optional).' do |cd|
+        @options.chart_description = cd
+      end
+
+      opts.on '-k', '--chart-key KEY',
+          'KEY to determine what chart to update.',
+          'KEY should be one of: name, title, description, id.' do |ck|
+        @options.chart_key = ck
+      end
+
+      opts.parse!(@arguments) rescue return false
+
+      process_options
+      true      
+    end
+
+    # Performs post-parse processing on options
+    def process_options
+      @options.verbose = false if @options.quiet
+    end
+    
+    def output_options
+      puts "Options:\n"
+      
+      @options.marshal_dump.each do |name, val|        
+        puts "  #{name} = #{val}"
+      end
+    end
+
+    # True if required arguments were provided
+    def arguments_valid?
+      @options.user && @options.password && @options.group
+    end
+    
+    # Setup the arguments
+    def process_arguments
+      # TO DO - place in local vars, etc
+      @s6 = Swivel6.new @options.user, @options.password, @options.group, @options.url
+    end
+    
+    def output_help
+      output_version
+      RDoc::usage() #exits app
+    end
+    
+    def output_usage
+      RDoc::usage('usage') # gets usage from comments above
+    end
+    
+    def output_version
+      puts "#{File.basename(__FILE__)} version #{VERSION}"
+    end
+    
+    def process_command
+      data = if @options.file
+          FasterCSV.read @options.file
+        else
+          FasterCSV.new(@stdin).to_a
+        end
+
+      chart = if @options.chart_key
+          find_or_create_chart @options.chart_key
+        else
+          create_chart
+        end
+
+      if @options.chart_title or @options.chart_name or @options.chart_description
+        opts = {}
+        opts["title"] = @options.chart_title if @options.chart_title
+        opts["name"] = @options.chart_name if @options.chart_name
+        opts["description"] = @options.chart_description if @options.chart_description
+        @s6.update_chart chart, opts
+      end
+
+      if @options.merge
+        data = merge_data @s6.chart_data(chart), data
+      else
+        @s6.clear_chart_data chart
+      end
+
+      @s6.set_chart_data chart, data
+
+      url = if @options.url == API_URL
+          SWIVEL_URL
+        else
+          @options.url
+        end
+
+      puts "Chart available at: #{url}/charts/#{chart['id']}"
+    end
+
+    def find_or_create_chart by
+      charts = @s6.charts
+
+      match = case by
+          when 'title' then @options.chart_title
+          when 'name' then @options.chart_name
+          when 'description' then @options.chart_description
+        end
+
+      chart = charts.select{|c| c[by] && (c[by] == match)}.sort_by{|w| DateTime.parse(w['created_at'])}.last
+      unless chart
+        chart = create_chart
+      end
+      chart
+    end
+
+    def create_chart
+      chart = @s6.create_chart
+      @s6.clear_chart_data chart
+      chart
+    end
+
+    # TODO this is an ugly method, DRY it and clean it
+    def merge_data original, update
+      return update if original.empty?
+
+      # corner header
+      corner = original[0][0]
+
+      # col headers
+      och = original[0][1..-1]
+      uch = update[0][1..-1]
+
+      dif = Set.new(uch) - och
+
+      col_headers = uch.select{|h| dif.include? h } + och
+
+      # row headers
+      orh = original[1..-1].map{|r| r[0] }
+      urh = update[1..-1].map{|r| r[0] }
+
+      dif = Set.new(urh) - orh
+      row_headers = urh.select{|h| dif.include? h } + orh
+
+      update_data = {}
+      update[1..-1].each_with_index do |row, r|
+        update_data[urh[r]] ||= {}
+        row[1..-1].each_with_index do |cell, c|
+          update_data[urh[r]][uch[c]] = cell
+        end
+      end
+
+      original_data = {}
+      original[1..-1].each_with_index do |row, r|
+        original_data[orh[r]] ||= {}
+        row[1..-1].each_with_index do |cell, c|
+          original_data[orh[r]][och[c]] = cell
+        end
+      end
+
+      data = [[corner] + col_headers] +
+        row_headers.map do |row|
+          [row] + col_headers.map do |col|
+            update_data[row] && update_data[row][col] ||
+              original_data[row] && original_data[row][col]
+          end
+        end
+
+      data
+    end
+
+end
+
+class Swivel6
+  def initialize user, password, group, root_url = 'https://api.swivel.com/v1'
+    @user = user
+    @password = password
+    @group = group
+    @root_url = root_url
+    @uri = URI.parse(root_url)
+    @http = Net::HTTP.new @uri.host, @uri.port
+    if @uri.scheme == 'https'
+      @http.use_ssl = true
+      @http.verify_mode = OpenSSL::SSL::VERIFY_NONE
+    end
+  end
+
+  def workbooks
+    api_get "groups/#{@group}/workbooks"
+  end
+
+  def workbook_sheets workbook
+    api_get "workbooks/#{workbook['id']}/sheets"
+  end
+
+  def sheet_data sheet
+    get_data "tabulars/#{sheet['id']}/cells"
+  end
+
+  def charts
+    api_get "groups/#{@group}/charts"
+  end
+
+  def chart_data chart
+    grid_id = get_chart_grid_id chart
+    get_data "tabulars/#{grid_id}/cells"
+  end
+
+  def create_chart
+    api_post "groups/#{@group}/charts", 'grid' => {'name' => 'Chart Data'}
+  end
+
+  def update_chart chart, hash
+    api_put "groups/#{@group}/charts/#{chart['id']}", 'chart' => hash
+  end
+
+  def clear_chart_data chart
+    # delete chart data that already exists (replace it)
+    grid_id = get_chart_grid_id chart
+    data = chart_data chart
+    if data.size > 0
+      saveList = [{"action" => 'removeRows', "start" => 0, "end" => data.size - 1}]
+      api_put "grids/#{grid_id}", 'tabular' => { 'save_list' => saveList.to_json }
+    end
+  end
+
+  def set_chart_data chart, data
+    # put the new data into the chart
+    saveListCells = []
+    data.each_with_index do |row, r|
+      row.each_with_index do |cell, c|
+        if cell
+          saveListCells.push ["#{c},#{r}", {"v" => cell}]
+        end
+      end
+    end
+    saveList = [{"action" => 'edit', "cell_values" => saveListCells}]
+    grid_id = get_chart_grid_id chart
+    api_put "grids/#{grid_id}", 'tabular' => { 'save_list' => saveList.to_json }
+  end
+
+private
+  def api_post path, hash = {}
+    xml = XmlSimple.xml_out hash, 'keeproot' => true, 'noattr' => true
+    resp = post path + ".json", xml
+    JSON.parse resp
+  end
+
+  def api_put path, hash = {}
+    xml = XmlSimple.xml_out hash, 'keeproot' => true, 'noattr' => true
+    resp = put path + ".json", xml
+    JSON.parse resp if resp.strip != ''
+  end
+
+  def api_get path
+    ret = []
+    json = nil
+    page = 1
+    begin
+      resp = get path + ".json", "page=#{page}"
+      json = JSON.parse resp
+
+      return json unless json.is_a? Array
+
+      ret.concat json
+      page += 1
+    end while json.size == 1000
+    ret
+  end
+
+  def get path, params = nil
+    request 'get', path, :params => params
+  end
+
+  def post path, xml
+    request 'post', path, :xml => xml
+  end
+
+  def put path, xml
+    request 'put', path, :xml => xml
+  end
+
+  def request req, path, opts = {}
+    uri = @uri.merge path
+    uri.query = opts[:params] if opts[:params]
+
+    puts "#{req} #{uri.request_uri}"
+    req_class = case req
+      when "post"
+        Net::HTTP::Post
+      when "put"
+        Net::HTTP::Put
+      when "get"
+        Net::HTTP::Get
+      end
+    req = req_class.new uri.request_uri
+
+    if opts[:xml]
+      req.set_content_type 'text/xml'
+      req.body = opts[:xml]
+    end
+
+    req.basic_auth @user, @password
+
+    @http.start do |http|
+      http.request(req).body
+    end
+  end
+
+  def get_data path
+    cells = api_get path
+
+    num_rows = cells.map{|c| c['r'].to_i}.max + 1 rescue 0
+    num_cols = cells.map{|c| c['c'].to_i}.max + 1 rescue 0
+
+    data = Array.new(num_rows) do
+      Array.new(num_cols)
+    end
+
+    cells.each do |cell|
+      data[cell['r']][cell['c']] = cell['formatted']
+    end
+
+    data
+  end
+
+  def get_chart_grid_id chart
+    if chart['grid_id'].nil?
+      json = api_get "/groups/#{@group}/charts/#{chart['id']}/grid"
+      chart['grid_id'] = json['id'].to_i
+    end
+    chart['grid_id']
+  end
+end
+
+# Create and run the application
+app = App.new(ARGV, STDIN)
+app.run
