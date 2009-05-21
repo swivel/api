@@ -4,7 +4,7 @@
 #   Creates or updates a Swivel graph from a CSV.
 #
 # == Examples
-#   This command creates a chart in group 1 for gerad@swivel.com.
+#   This command creates a chart in group 1 for email@address.com.
 #     ruby s6cmd.rb -u 'email@address.com' -p 'password' -g 1 -f file.csv
 #
 #   Using the command with STDIN and giving the chart the name "Chart Name."
