@@ -46,7 +46,7 @@
 #     END
 #
 # == Usage 
-#   s6cmd [options] source_file
+#   s6cmd [options] -f source_file
 #
 #   For help use: s6cmd -h
 #
@@ -331,7 +331,7 @@ class App
         row_headers.map do |row|
           [row] + col_headers.map do |col|
             update_data[row] && update_data[row][col] ||
-              original_data[row] && original_data[row][col]
+              original_data[row] && original_data[row][col] || ''
           end
         end
 
