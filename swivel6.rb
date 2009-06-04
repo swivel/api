@@ -39,7 +39,7 @@ class Swivel6
   end
 
   def create_chart
-    api_post "groups/#{@group}/charts"
+    api_post "groups/#{@group}/charts", 'chart' => { 'name' => 'API Created Chart' }
   end
 
   def update_chart chart, hash
