@@ -34,8 +34,7 @@ class Swivel6
   end
 
   def chart_data chart
-    grid_id = get_chart_grid_id chart
-    get_data "tabulars/#{grid_id}/cells"
+    FasterCSV.parse get("charts/#{chart['id']}.csv")
   end
 
   def create_chart
@@ -47,28 +46,11 @@ class Swivel6
   end
 
   def clear_chart_data chart
-    # delete chart data that already exists (replace it)
-    grid_id = get_chart_grid_id chart
-    data = chart_data chart
-    if data.size > 0
-      saveList = [{"action" => 'removeRows', "start" => 0, "end" => data.size - 1}]
-      api_put "grids/#{grid_id}", 'tabular' => { 'save_list' => saveList.to_json }
-    end
+    api_put "charts/#{chart['id']}", 'chart' => { 'data' => '' }
   end
 
   def set_chart_data chart, data
-    # put the new data into the chart
-    saveListCells = []
-    data.each_with_index do |row, r|
-      row.each_with_index do |cell, c|
-        if cell
-          saveListCells.push ["#{c},#{r}", {"v" => cell}]
-        end
-      end
-    end
-    saveList = [{"action" => 'edit', "cell_values" => saveListCells}]
-    grid_id = get_chart_grid_id chart
-    api_put "grids/#{grid_id}", 'tabular' => { 'save_list' => saveList.to_json }
+    api_put "charts/#{chart['id']}", 'chart' => { 'data' => data.map{|row| row.to_csv}.join }
   end
 
 private
@@ -90,7 +72,12 @@ private
     page = 1
     begin
       resp = get path + ".json", "page=#{page}"
-      json = JSON.parse resp
+      begin
+        json = JSON.parse resp
+      rescue
+        puts path
+        puts resp
+      end
 
       return json unless json.is_a? Array
 
