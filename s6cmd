@@ -363,7 +363,7 @@ class Swivel6
   end
 
   def sheet_data sheet
-    get_data "tabulars/#{sheet['id']}/cells"
+    FasterCSV.parse get("sheets/#{sheet['id']}.csv")
   end
 
   def charts
@@ -393,38 +393,51 @@ class Swivel6
 private
   def api_post path, hash = {}
     xml = XmlSimple.xml_out hash, 'keeproot' => true, 'noattr' => true
-    resp = post path + ".json", xml
+    resp = post(path + ".json", xml).body
     JSON.parse resp
   end
 
   def api_put path, hash = {}
     xml = XmlSimple.xml_out hash, 'keeproot' => true, 'noattr' => true
-    resp = put path + ".json", xml
+    resp = put(path + ".json", xml).body
     JSON.parse resp if resp.strip != ''
   end
 
-  def api_get path
+  def api_get path, params = {}
     ret = []
     json = nil
     page = 1
+    max_page = 1_000
     begin
-      resp = get path + ".json", "page=#{page}"
+      resp = get path + ".json", params.merge(:page => page)
+
       begin
-        json = JSON.parse resp
+        json = JSON.parse resp.body
       rescue
         puts path
-        puts resp
+        puts resp.body
       end
 
       return json unless json.is_a? Array
 
       ret.concat json
+
+      should_continue =
+        if resp['content-range'] && resp['content-range'] =~ /pages \d+-(\d+)\/(\d+)/
+          page = $1.to_i
+          max_page = $2.to_i
+          page < max_page
+        else
+          # hack for pages that don't have content-range
+          json.length == 30
+        end
+
       page += 1
-    end while json.size == 1000
+    end while should_continue
     ret
   end
 
-  def get path, params = nil
+  def get path, params = {}
     request 'get', path, :params => params
   end
 
@@ -438,7 +451,7 @@ private
 
   def request req, path, opts = {}
     uri = @uri.merge path
-    uri.query = opts[:params] if opts[:params]
+    uri.query = hash_to_param_string(opts[:params]) if opts[:params]
 
     puts "#{req} #{uri.request_uri}"
     req_class = case req
@@ -459,33 +472,12 @@ private
     req.basic_auth @user, @password
 
     @http.start do |http|
-      http.request(req).body
+      http.request req
     end
   end
 
-  def get_data path
-    cells = api_get path
-
-    num_rows = cells.map{|c| c['r'].to_i}.max + 1 rescue 0
-    num_cols = cells.map{|c| c['c'].to_i}.max + 1 rescue 0
-
-    data = Array.new(num_rows) do
-      Array.new(num_cols)
-    end
-
-    cells.each do |cell|
-      data[cell['r']][cell['c']] = cell['formatted']
-    end
-
-    data
-  end
-
-  def get_chart_grid_id chart
-    if chart['grid_id'].nil?
-      json = api_get "/groups/#{@group}/charts/#{chart['id']}/grid"
-      chart['grid_id'] = json['id'].to_i
-    end
-    chart['grid_id']
+  def hash_to_param_string hash
+    hash.keys.map{ |k| CGI.escape(k.to_s) + '=' + CGI.escape(hash[k].to_s) }.join('&');
   end
 end
 
