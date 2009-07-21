@@ -26,7 +26,7 @@ class Swivel6
   end
 
   def sheet_data sheet
-    FasterCSV.parse get("sheets/#{sheet['id']}.csv")
+    FasterCSV.parse get("sheets/#{sheet['id']}.csv").body
   end
 
   def charts
@@ -34,7 +34,7 @@ class Swivel6
   end
 
   def chart_data chart
-    FasterCSV.parse get("charts/#{chart['id']}.csv")
+    FasterCSV.parse get("charts/#{chart['id']}.csv").body
   end
 
   def create_chart
