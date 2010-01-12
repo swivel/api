@@ -243,7 +243,7 @@ $s6 = new Swivel6('email@address.com', 'YOUR_PASSWORD', 1000000); // NOTE replac
 $newchart = $s6->create_chart();
 echo $newchart->name."\n";
 
-$s6->update_chart($newchart, array('title' => 'API Chart', 'name' => 'API Chart', 'description' => 'A chart made automatically with the Swivel API.'));
+$s6->update_chart($newchart, array('name' => 'API Chart', 'description' => 'A chart made automatically with the Swivel API.'));
 $s6->set_chart_data($newchart, array(
   array('Monthly Summary','New Topics','New Posts','New Members','Most Online'),
   array('March 2009',922,12133,193,26),

@@ -14,8 +14,8 @@
 #     b,3,4
 #     END
 #
-#   Updating the chart with name "Chart Name."  Also, setting the title.
-#     cat <<END | ruby s6cmd.rb -u 'email@address.com' -p 'password' -g 1 -n "Chart Name" -t "Chart Title" -k name
+#   Updating the chart with name "Chart Name."
+#     cat <<END | ruby s6cmd.rb -u 'email@address.com' -p 'password' -g 1 -n "Chart Name" -k name
 #     one,four,five
 #     c,5,6
 #     d,7,8
@@ -62,12 +62,11 @@
 #                                    Default is STDIN.
 #   -m, --merge                      Merge new data with existing chart data.
 #                                    Uses row and column headers as merge keys.
-#   -t, --chart-title TITLE          TITLE of chart (optional).
 #   -n, --chart-name NAME            NAME of chart (optional).
 #   -d, --chart-description DESCRIPTION
 #                                    DESCRIPTION of chart (optional).
 #   -k, --chart-key KEY              KEY to determine what chart to update.
-#                                    KEY should be one of: name, title, description
+#                                    KEY should be one of: name, description
 #
 # == Author
 #   Swivel, LLC
@@ -85,6 +84,7 @@ require 'xmlsimple'
 require 'uri'
 require 'net/https'
 require 'json'
+require 'cgi'
 
 class App
   VERSION = '0.0.1'
@@ -165,11 +165,6 @@ class App
         @options.merge = true
       end
 
-      opts.on '-t', '--chart-title TITLE',
-          'TITLE of chart (optional).' do |ct|
-        @options.chart_title = ct
-      end
-
       opts.on '-n', '--chart-name NAME',
           'NAME of chart (optional).' do |cn|
         @options.chart_name = cn
@@ -182,7 +177,7 @@ class App
 
       opts.on '-k', '--chart-key KEY',
           'KEY to determine what chart to update.',
-          'KEY should be one of: name, title, description, id.' do |ck|
+          'KEY should be one of: name, description, id.' do |ck|
         @options.chart_key = ck
       end
 
@@ -242,9 +237,8 @@ class App
           create_chart
         end
 
-      if @options.chart_title or @options.chart_name or @options.chart_description
+      if @options.chart_name or @options.chart_description
         opts = {}
-        opts["title"] = @options.chart_title if @options.chart_title
         opts["name"] = @options.chart_name if @options.chart_name
         opts["description"] = @options.chart_description if @options.chart_description
         @s6.update_chart chart, opts
@@ -271,7 +265,6 @@ class App
       charts = @s6.charts
 
       match = case by
-          when 'title' then @options.chart_title
           when 'name' then @options.chart_name
           when 'description' then @options.chart_description
         end
